@@ -29,10 +29,22 @@ jobs:
       - name: Generate ephemeral test credentials
         shell: bash
         run: |
-          echo "DB_PASSWORD=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
-          echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-          echo "JWT_REFRESH_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-          echo "S3_SECRET_KEY=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
+          DB_PASSWORD="$(openssl rand -hex 24)"
+          JWT_SECRET="$(openssl rand -hex 32)"
+          JWT_REFRESH_SECRET="$(openssl rand -hex 32)"
+          S3_SECRET_KEY="$(openssl rand -hex 24)"
+
+          echo "::add-mask::$DB_PASSWORD"
+          echo "::add-mask::$JWT_SECRET"
+          echo "::add-mask::$JWT_REFRESH_SECRET"
+          echo "::add-mask::$S3_SECRET_KEY"
+
+          {
+            echo "DB_PASSWORD=$DB_PASSWORD"
+            echo "JWT_SECRET=$JWT_SECRET"
+            echo "JWT_REFRESH_SECRET=$JWT_REFRESH_SECRET"
+            echo "S3_SECRET_KEY=$S3_SECRET_KEY"
+          } >> "$GITHUB_ENV"
 
       - name: Build and start the full stack
         run: docker compose up --build --detach --wait
