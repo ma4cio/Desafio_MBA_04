@@ -105,3 +105,9 @@ Skip documentation lookup only for trivial operations such as:
 
 If a library is involved and there is uncertainty, documentation lookup is mandatory.
 If the documentation returned does not match the installed version, flag the discrepancy before proceeding.
+
+## Phase 03 — Videos
+
+The backend video implementation lives in `nestjs-project/src/videos/`. Uploads use S3-compatible multipart URLs so file bytes go directly to MinIO, not through NestJS. `POST /videos/uploads` creates the draft; part URLs are requested in batches at `POST /videos/:id/upload-parts`; `POST /videos/:id/uploads/complete` validates the object and enqueues processing.
+
+BullMQ uses Redis and stable `video-{uuid}` job IDs with bounded exponential retry. The separate `video-worker` Compose service boots `src/worker.ts`, downloads the source as a stream to temporary disk, runs FFprobe and FFmpeg, stores a JPEG thumbnail, and persists `ready` or `error`. Authenticated owners can inspect status, stream with HTTP byte ranges, retrieve the thumbnail and download the original. Compose includes Redis 7, MinIO, bucket initialization and the worker.
