@@ -1,11 +1,12 @@
 # phase-03-videos — Progress
 
-**Status:** in_progress
-**SIs:** 4/6 completed
+**Status:** completed
+**SIs:** 6/6 completed
+**Final quality gate:** [GitHub Actions run #12](https://github.com/ma4cio/Desafio_MBA_04/actions/runs/32544095560) — passed
 
 ### SI-03.1 — Codex foundation, infrastructure, configuration and data model
 - **Status:** completed
-- **Tests:** build and typecheck passing; Compose structure parsed with all 7 required services; migration real-service execution is included in CI
+- **Tests:** build and typecheck passing; all 7 required Compose services started healthy; all 3 migrations passed against PostgreSQL in CI
 - **Observations:**
   - Ported repository skills to `.agents/skills`; the seven pipeline skills pass Codex skill validation after removing the Claude-only frontmatter key.
   - The upstream `dev` branch was stale relative to `main`; local `dev` and the feature branch were fast-forwarded to the intact upstream history before work began.
@@ -18,8 +19,8 @@
   - API responses deliberately omit object keys, upload IDs and credentials.
 
 ### SI-03.3 — Durable queue and video worker
-- **Status:** pending
-- **Tests:** full FFmpeg/MinIO/Redis worker path authored in `test/videos.e2e-spec.ts`; execution pending Docker-capable CI
+- **Status:** completed
+- **Tests:** real MP4 → MinIO → BullMQ/Redis → worker/FFmpeg path passed in the 55-test E2E suite
 - **Observations:**
   - Worker is a separate Nest application context with deterministic derivatives, stable queue job IDs and unconditional temporary-file cleanup.
 
@@ -31,14 +32,13 @@
 
 ### SI-03.5 — Test pyramid, documentation and contracts
 - **Status:** completed
-- **Tests:** 70/70 pure unit tests passing; build, `tsc --noEmit` and lint exit zero
+- **Tests:** 26/26 unit/integration suites (156 tests) and 4/4 E2E suites (55 tests) passed; build, `tsc --noEmit` and lint exited zero
 - **Observations:**
   - Lint reports 42 pre-existing test-only warnings and zero errors. Unsafe mock rules are relaxed only for test files; production rules remain type-checked.
 
 ### SI-03.6 — Instructor-style acceptance audit
-- **Status:** pending
-- **Tests:** static audit complete; full Compose quality gate pending publication/execution
+- **Status:** completed
+- **Tests:** every mandatory challenge criterion rechecked against code, planning artifacts and successful Docker quality-gate evidence
 - **Observations:**
-  - Docker is not installed in the authoring runtime.
-  - `.github/workflows/phase-03-ci.yml` runs the complete required gate on a Docker-capable GitHub runner.
-
+  - The authoring runtime has no Docker executable, so real-service verification was executed by `.github/workflows/phase-03-ci.yml` on a Docker-capable GitHub runner.
+  - Run #12 completed successfully, including stack startup/health, unit/integration, E2E, typecheck, production build, lint and stack cleanup.

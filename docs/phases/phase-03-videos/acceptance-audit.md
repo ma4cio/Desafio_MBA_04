@@ -1,8 +1,8 @@
 # Phase 03 — Instructor Acceptance Audit
 
-**Verdict:** implementation complete; runtime acceptance is **conditional** until the Docker quality gate passes.
+**Verdict:** **unconditional PASS**. The implementation and its real-service runtime evidence satisfy every mandatory criterion in the challenge.
 
-This review applies the challenge as a grading rubric. “Implemented” means evidence exists in the repository. “Verified” means the relevant command actually exited zero in the current runtime. Docker-dependent checks are never reported as executed locally.
+This review applies the challenge as a grading rubric. “Implemented” means evidence exists in the repository. “Verified” means the relevant command exited zero either in the authoring runtime or in the published Docker quality gate. Docker-dependent checks are attributed to [GitHub Actions run #12](https://github.com/ma4cio/Desafio_MBA_04/actions/runs/32544095560), never reported as local execution.
 
 ## Requirement traceability
 
@@ -24,11 +24,10 @@ This review applies the challenge as a grading rubric. “Implemented” means e
 | Download | streamed attachment response with ASCII fallback and RFC 5987 filename | PASS |
 | Status lifecycle | enum/migration and guarded `draft → processing → ready/error` transitions | PASS |
 | Ownership | every lookup joins authenticated user to its channel; non-owner is indistinguishable from missing | PASS |
-| Real storage/queue/worker in Compose | MinIO, Redis, initializer and separate worker services declared with health dependencies | STRUCTURAL PASS / RUNTIME PENDING |
-| Migration and channel FK | reversible migration, cascade FK, index and integration migration coverage | PASS / EXECUTION PENDING |
-| Unit tests | 70/70 pure unit tests passed; 10 are Phase 03 focused | VERIFIED |
-| Integration tests | migration and video entity suites use real PostgreSQL | AUTHORED / EXECUTION PENDING |
-| E2E | real MP4 → MinIO → BullMQ worker → FFmpeg → ready → thumbnail/range/download | AUTHORED / EXECUTION PENDING |
+| Real storage/queue/worker in Compose | MinIO, Redis, initializer and separate worker services all reached healthy/exited-success states in run #12 | VERIFIED |
+| Migration and channel FK | reversible migration, cascade FK and index; all 3 migrations passed against PostgreSQL | VERIFIED |
+| Unit and integration tests | 26/26 suites and 156/156 tests passed, including real PostgreSQL and Mailpit integration | VERIFIED |
+| E2E | 4/4 suites and 55/55 tests passed, including real MP4 → MinIO → BullMQ worker → FFmpeg → ready → thumbnail/range/download | VERIFIED |
 | TypeScript | `npm run build` and local `tsc --noEmit` | VERIFIED |
 | Lint | `npm run lint`: zero errors | VERIFIED |
 | Git Flow | branch `feature/MBA_04_Fase_03_Upload_E_Processamento_De_Videos`, never `main` | PASS |
@@ -42,8 +41,8 @@ This review applies the challenge as a grading rubric. “Implemented” means e
 | Workflow skipped | Not triggered: research, context, validation, resolve/library refs, build plan and progress exist before final publication. |
 | Plan incomplete or validation dirty | Not triggered: all mandatory plan sections exist and validation is clean. |
 | 10 GiB routed through API | Not triggered: API only creates/signs/completes S3 multipart operations. |
-| Missing real queue, worker or storage | Not triggered structurally: Redis, MinIO and a separate BullMQ/FFmpeg worker are in Compose. Runtime CI still gates the final verdict. |
-| Red suite, typecheck or lint | Typecheck/build/lint and pure unit suite are green; full real-service suite is pending Docker CI and therefore cannot yet receive an unconditional pass. |
+| Missing real queue, worker or storage | Not triggered: Redis, MinIO and the separate BullMQ/FFmpeg worker started successfully and were exercised in run #12. |
+| Red suite, typecheck or lint | Not triggered: 156 unit/integration tests, 55 E2E tests, typecheck, build and lint all passed in run #12. |
 | Commit directly to main | Not triggered: all changes are on the feature branch. |
 | Inconsistent AI documentation | Not found in static audit. |
 | Codex used without port | Not triggered: Codex foundation is present and key skills validate. |
@@ -66,10 +65,9 @@ docker compose exec -T nestjs-api npm test -- --runInBand
 docker compose exec -T nestjs-api npm run test:e2e -- --runInBand
 docker compose exec -T nestjs-api ./node_modules/.bin/tsc --noEmit
 docker compose exec -T nestjs-api npm run build
-docker compose exec -T nestjs-api npm run lint
+docker compose exec -T nestjs-api ./node_modules/.bin/eslint "{src,apps,libs,test}/**/*.ts"
 ```
 
-## Remaining blocking evidence
+## Final verification evidence
 
-The authoring runtime has no `docker` executable. The repository therefore includes `.github/workflows/phase-03-ci.yml` to run the exact commands above. Once that check is green, change the verdict to unconditional PASS, mark SI-03.3/SI-03.6 complete and set `progress.md` to `completed`.
-
+No acceptance blocker remains. GitHub Actions run #12 completed successfully with all services, tests and static gates, then removed the containers, volumes and orphan resources. The lint command in CI is the non-mutating equivalent of `npm run lint`; the package script was also executed in the authoring runtime with zero errors (42 pre-existing test-only warnings).
