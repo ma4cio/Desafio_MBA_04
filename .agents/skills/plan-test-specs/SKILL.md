@@ -260,4 +260,178 @@ For each spec file:
 
    If the field is already populated (`see ...`), skip — already done in a prior `/plan-test-specs` run.
 
-5. **Edge case — non-content-touching specs (zero NEW + zero PRESERVED Edits).** Quando TODOS os cenários de um spec ficaram em **UPDATED / MANUAL / DELETED / ORPHAN** states, nenhum Edit content-bearing fire e o file mtime stays old → /implement preflight aborta STALE mesmo após /plan-test-specs ter rodado. **Mitigação obrigatória (aplica-se inclusive a all-MANUAL specs):** emit um **no-op Edit no frontmatter do spec** (substituição idempotente do próprio valor atual — ler o frontmatter, escolher uma linha estável, e substituí-la por ela mesma) só pra bumpar o file mtime. Exemplo: para um spec frontend, replace `subproject: frontend` por `subproject: frontend`; para um spec backend, replace `subproject: backend` por `subproject: backend`. **Use o valor atual do campo, não um literal hardcoded** — substituir `subproject: backend` por `subproject: frontend` corromperia o spec e quebraria a detecção de runner em `/implement` Step 3a. O frontmatter bump **não viola** a invariant "user is owner of MANUAL content" porque nenhum cenário tem seu corpo tocado — a única mudança é file metadata. Alternativa equivalente: `Bash touch <spec-path>`. Skill **escolhe o no-op Edit** (não requer dispatch de Bash). Esta é a mitigação canônica do **MANUAL deadlock**: sem ela, all-MANUAL specs causariam loop infinito (`/implement` aborta STALE → user roda `/plan-test-specs` → MANUAL skip silently → file mtime ainda velho → `/implement` aborta
+5. **Edge case — non-content-touching specs (zero NEW + zero PRESERVED Edits).** Quando TODOS os cenários de um spec ficaram em **UPDATED / MANUAL / DELETED / ORPHAN** states, nenhum Edit content-bearing fire e o file mtime stays old → /implement preflight aborta STALE mesmo após /plan-test-specs ter rodado. **Mitigação obrigatória (aplica-se inclusive a all-MANUAL specs):** emit um **no-op Edit no frontmatter do spec** (substituição idempotente do próprio valor atual — ler o frontmatter, escolher uma linha estável, e substituí-la por ela mesma) só pra bumpar o file mtime. Exemplo: para um spec frontend, replace `subproject: frontend` por `subproject: frontend`; para um spec backend, replace `subproject: backend` por `subproject: backend`. **Use o valor atual do campo, não um literal hardcoded** — substituir `subproject: backend` por `subproject: frontend` corromperia o spec e quebraria a detecção de runner em `/implement` Step 3a. O frontmatter bump **não viola** a invariant "user is owner of MANUAL content" porque nenhum cenário tem seu corpo tocado — a única mudança é file metadata. Alternativa equivalente: `Bash touch <spec-path>`. Skill **escolhe o no-op Edit** (não requer dispatch de Bash). Esta é a mitigação canônica do **MANUAL deadlock**: sem ela, all-MANUAL specs causariam loop infinito (`/implement` aborta STALE → user roda `/plan-test-specs` → MANUAL skip silently → file mtime ainda velho → `/implement` aborta STALE de novo).
+
+### Stage 4 — Output summary
+
+Emit a single block:
+
+```
+DONE. /plan-test-specs <slug>:
+  Test specs created: <list of NEW spec file paths>
+  Test specs updated: <list of files with NEW or re-stamped scenarios>
+  Test specs mtime-bumped only: <list of files where ALL scenarios are MANUAL/UPDATED/DELETED/ORPHAN — no content edit, only no-op frontmatter bump from Stage 3 Step 5>
+  Warnings: <count>
+
+Next: run /implement <slug> to execute the plan with these specs.
+```
+
+If warnings count > 0, ensure the report references the line numbers (or just the warning text) emitted in Stage 2.
+
+## Spec format (universal)
+
+The spec file is **NOT** a planning artifact — it does not follow `kind:` / `name:` convention from `.claude/skills/plan-pipeline/SKILL.md`. Specs are test contracts, parallel to `library-refs.md` exemption.
+
+```markdown
+---
+subproject: backend | frontend       # canonical runner discriminator (consumed by /implement Step 3a)
+runner: <runner-tag>                 # informational only — `playwright` for frontend; per-backend runner tag for backend (e.g., `jest+supertest`, `pytest`, `gotest`); must match `subproject:`; `subproject:` is canonical
+scope: phase-NN-{slug} | task-{slug}
+si: SI-NN.X | SI-N
+target_file: <resolved E2E test path>         # 1 arquivo de teste por spec; cenários viram test() blocks.
+                                              # Path concreto (pasta + sufixo + nome) derivado da convenção E2E
+                                              # do subprojeto via testing-guide-{subproject} e resolvido por
+                                              # /plan-test-specs na geração — NÃO hardcodar pasta/sufixo aqui.
+---
+
+# <Screen | Endpoint> Test Plan
+
+## Application Overview
+
+<Um parágrafo descrevendo o que esta tela / endpoint faz e por quê.>
+
+## Test Scenarios
+
+### 1. <Group Name — verbatim from screen-inventory ou API Contract>
+
+**Setup:** <fixture reference (frontend) | DB cleanup + module bootstrap (backend)>
+
+#### 1.1. <kebab-case-scenario-name>
+
+**Covers AC:** #1, #4
+**Source:** auto
+**Last sync:** 2026-05-02T14:30:00Z
+
+**Steps:**
+  1. <user-actor or API-caller voice — depending on subproject>
+    - expect: <observable outcome>
+    - expect: <another outcome>
+  2. <next step>
+    - expect: <outcome>
+```
+
+### File-naming convention
+
+- **1 spec → 1 test file**, declarado via `target_file:` no frontmatter. O path concreto (pasta + sufixo + nome) é derivado da convenção E2E do subprojeto via `testing-guide-{subproject}` (ver Reason abaixo) e resolvido por `/plan-test-specs` na geração — esta skill NÃO fixa pasta nem sufixo.
+- **N cenários no spec → N `test()` blocks** dentro de um único `test.describe('<feature>')` no arquivo gerado.
+- Cenário individual NÃO tem `**File:**` field — caminho é shared via `target_file:`.
+
+Reason: the project's frontend testing convention is *"one file per feature/flow"* with `test.describe('<feature>')` agrupando. Adotar 1 arquivo por cenário (Microsoft canonical) violaria essa regra. The `testing-guide-{subproject}` Skill (loaded by `/implement` Step 2 for the frontend subproject) is the canonical entry point for that convention. It is also the single source of truth for the `target_file:` path itself (folder + suffix per subproject); `/plan-test-specs` reads that convention at generation time and writes a concrete `target_file:` — no folder or suffix is hardcoded in this skill.
+
+### Per-subproject vocabulary
+
+| Field / Voice | Frontend | Backend |
+|---|---|---|
+| `Setup:` | `<frontend-subproject>/tests/fixtures.ts` (MSW network fixture auto-applied) | `beforeEach` truncate test DB; bootstrap backend test module (e.g., NestJS: `Test.createTestingModule(...).compile()`) |
+| Step voice | "Usuário clica em Sign in" (user-actor) | "POST /auth/register com body X" (API-caller) |
+| Expect vocabulary | DOM-observable + URL state + toast text | HTTP status + response body shape + DB state + side-effects |
+| File path (per spec) | per `testing-guide-frontend` E2E convention — resolved at generation, no folder/suffix hardcoded here | per `testing-guide-backend` E2E convention — idem |
+| Import in generated test | the MSW network fixture, imported from its path per `testing-guide-frontend` (NEVER `'@playwright/test'`) | backend test bootstrap module + HTTP client (e.g., NestJS `Test` module + Supertest) |
+
+### Boundary — what externalizes vs stays inline
+
+| Camada | Localização | Razão |
+|---|---|---|
+| Playwright E2E (frontend) | `<frontend-subproject>/specs/*.plan.md` | externaliza |
+| E2E (backend) | `<backend-subproject>/specs/*.plan.md` | externaliza |
+| Unit (frontend) | inline na Tests table do SI | fica inline |
+| Integration (frontend — e.g., Route Handlers / msw/node) | inline na Tests table do SI | fica inline |
+| MSW handler tests (`auth-handlers.spec.ts`) | inline no SI próprio | fica inline (não é screen wiring) |
+| Unit (backend — services / repos) | inline na Tests table do SI | fica inline |
+| Backend integration (ORM repos / modules — e.g., TypeORM, Prisma, SQLAlchemy, Hibernate) | inline na Tests table do SI | fica inline |
+
+## Lifecycle states (MVP — L2 revisado)
+
+| State | Detection | v1 action |
+|---|---|---|
+| **NEW** | AC do plano sem cenário cobrindo | gerar cenário, marcar `Source: auto`, set `Last sync` ao timestamp da operação |
+| **PRESERVED** | Cenário existe; mtime do source (phase plan) ≤ `Last sync` do cenário | re-stamp Last sync (Edit cirúrgica substitui só a linha) — atualiza file mtime como side-effect |
+| **MANUAL** | Cenário com `Source: manual` ou sem `Source` field | skip silently |
+| **UPDATED** | Cenário com `Source: auto` E mtime do plano > `Last sync` | warning no delta report; user edita à mão |
+| **DELETED** | Cenário com `Source: auto` cobrindo apenas ACs que sumiram do plano | warning no delta report |
+| **ORPHAN** | `Covers AC: #N` aponta a AC inexistente no SI atual | warning no delta report |
+
+**Crítico — PRESERVED e file mtime.** O preflight do `/implement` checa **file mtime** (`stat -c %Y`) vs plan mtime. Se PRESERVED skipasse silently, file mtime ficaria antigo e preflight falsamente abortaria STALE. Por isso PRESERVED **emite Edit** mesmo com conteúdo OK — o Edit naturalmente atualiza file mtime. Esta é a operação que torna a sequência canônica `/plan-build` (append) → `/plan-test-specs` → `/implement` funcional.
+
+**MANUAL state — content untouched, but frontmatter bump still fires when ALL scenarios are MANUAL.** A skill respeita o user-as-owner-of-cenário: NÃO modifica corpo de cenário MANUAL nem adiciona/altera cenários adjacentes. **Mas** se TODOS os cenários do spec estão em MANUAL (i.e., zero NEW + zero PRESERVED Edits content-bearing fired), o no-op frontmatter Edit do Stage 3 Step 5 dispara mesmo assim — só pra bumpar file mtime e satisfazer `/implement` preflight. Isso elimina o deadlock onde all-MANUAL specs causariam loop infinito. Quando o spec tem mix de states (e.g., 2 NEW + 3 MANUAL), os NEW Edits naturalmente bumpam mtime; o no-op Step 5 só fire quando o set de Edits está vazio.
+
+**Limitação conhecida — UPDATED state overdetectado por file mtime global.** `mtime do plan` é file-level. Se user edita um SI backend independente, mtime sobe e TODO spec auto cobrindo qualquer SI é classificado UPDATED. v1 trata todos os UPDATED via warning; v2 considera per-SI mtime via parsing de Revisions blocks por SI.
+
+**CONFLICTED state** (auto-generated + user-edited + source changed) é deferido pra v2 — exige hash-based detection que adiciona complexidade não justificada no MVP.
+
+## Discovery via `**Test Specs:**` field
+
+The presence of `**Test Specs:**` field is the **trigger** (decides whether /plan-test-specs processes the SI). The **discriminator** is the SI_ID-shape + HAS_ROUTE combo, NOT `**Figma:**` (Xa-only field).
+
+**Why NOT use `**Figma:**`:** the Xb template (`screen-si.md`) does NOT include `**Figma:**` — only Xa does. Using HAS_FIGMA would classify Xb (frontend genuine) as backend. Correct discriminator: shape do SI_ID (sufixo `b` = frontend Xb) + presence de `**Route:**` cujo valor **começa com um HTTP method** (regex `^\*\*Route:\*\* (GET|POST|PUT|PATCH|DELETE) /`) = backend controller wiring. **Importante:** SI-Xa também tem campo `**Route:**`, mas com apenas a URL path (e.g., `**Route:** /signup`) — sem HTTP method prefix. O regex acima não dispara em SI-Xa, então HAS_ROUTE=0 e Xa não é mal classificada como backend. SI-Xa também não recebe `**Test Specs:**` (HAS_TEST_SPECS=0), então é skipped no caso 1 da tabela ("Skip — não é screen/controller wiring").
+
+**Cross-layer keyword é byte-verbatim binding (v1).** O cross-layer case casa o título via match literal de `(cross-layer)` (parêntese, lowercase, hífen, sem variantes). Variantes não suportadas em v1: `Cross-layer` capitalizado, `(Cross-Layer)`, sinônimos como "full-stack flow". Phase-b.md emit rules e este SKILL devem prescrever **literalmente** "use `(cross-layer)` lowercase em parênteses ao final do título do SI".
+
+## Integration points
+
+- **plan-pipeline overview** — `/plan-test-specs` é Stage 5 (linked back from `.claude/skills/plan-pipeline/SKILL.md`).
+- **plan-build** — emits `**Test Specs:** _pending /plan-test-specs_` placeholder em Xb / controller wiring / cross-layer SIs (phase-b.md, phase-c.md, screen-si.md) e `test_specs_aware: true` no frontmatter (phase-a.md). Output contract B7/C7 emite hint condicional pra invocar /plan-test-specs. **Trigger discriminator** (the placeholder string itself) is canonical — `/plan-test-specs` preflight greps for `^\*\*Test Specs:\*\* _pending` to count placeholders; `/implement` preflight uses the same regex.
+- **implement** — consome specs JIT no Step 3a (lê o spec, autora arquivo de teste via LLM single-pass; **1 spec → 1 file com N `test()` blocks**). Frontend: invoca `Skill playwright-cli` para carregar pattern references (test-generation.md, request-mocking.md, element-attributes.md) no contexto do LLM — NÃO invoca Section 2 interactive workflow nem `Bash playwright-cli generate` (subcomando inexistente). Backend: LLM-authored direto; o-que-testar e boas práticas por artefato vêm da Skill `testing-guide-{subproject}` (já carregada em `/implement` Step 2 para o subproject backend). Preflight modern aborta com `MISSING` / `STALE` / `PENDING TEST SPECS` (vide implement Skill § "Preflight").
+- **plan-validate** — **NO CHANGE.** Plan-validate continua operando só sobre `context.md`. Nenhum check spec-related; gates spec-related vivem em /plan-test-specs (delta report) e /implement preflight. Documentado em `docs/plan-spec-driven-test-skill.md` § "NO CHANGE".
+
+## Failure modes + abort messages
+
+| Cenário | Detection | Mensagem |
+|---|---|---|
+| Plano não existe | stat fail | `Plano não existe em <path>. Verifique se /plan-build já rodou para <slug>.` |
+| Plano legacy | `test_specs_aware` ausente do frontmatter | `Plano <slug> está em modo legacy. Para migrar: rode '/plan-build <slug> --rebuild' primeiro para regenerar no novo formato, então rerun /plan-test-specs.` |
+| Modern plan sem **Test Specs:** SI | `grep -c "^\*\*Test Specs:\*\*"` = 0 | No-op exit silencioso. (Não é erro — fase backend pura ou foundations-only.) |
+| SI Xb com `**Route:**` (impossível por construção) | discriminator caso 5 | `SI-NN.X termina em 'b' E tem **Route:**. Estado inválido por construção — Xb nunca tem Route. Investigar emissão em phase-b.md. Provavelmente bug.` |
+| Fall-through (SI plain, sem Route, sem cross-layer) | discriminator FALL-THROUGH | `SI-NN.X tem **Test Specs:** mas não casa nenhum case válido. Run /plan-build <slug> --rebuild OR remova manualmente o **Test Specs:** field do SI antes de retry.` |
+| Spec file malformed Covers AC | parse fail | `Cenário <id> em <spec-path> tem **Covers AC:** malformado: '<line>'. Esperado: '#<int>(, #<int>)*'. Edit manualmente e rerun.` |
+
+## Coverage gate semantics (v1 reduzido)
+
+Stage 1 step 7 monta dois conjuntos considerando os cenários em todos os specs referenciados pelo SI:
+
+```
+ACs_SI         = todas linhas Acceptance criteria do SI
+ACs_in_spec    = união de **Covers AC:** de TODOS os cenários em TODOS os specs
+                 referenciados pelo `**Test Specs:**` field do SI
+ACs_no_spec    = ACs_SI \ ACs_in_spec
+```
+
+Para cross-layer especificamente: cada spec (frontend.plan.md, backend.plan.md) tem cenários cobrindo subset de ACs. Coverage do SI = união dos `**Covers AC:**` de ambos. Warning emite só se algum AC fica uncovered em AMBOS.
+
+`ACs_no_spec ≠ ∅` → **warning** (não erro). Razão: muitas ACs cobertas legitimamente por linhas Unit/Integration na Tests section do SI; v1 não infere essa cobertura sem convenção de annotation.
+
+**v1 explicitamente NÃO força:**
+- Convenção `(cobre AC #N)` em rows da Tests section.
+- Coverage cross-source (spec scenarios + Tests section rows).
+- Abort em coverage incompleto — sempre warning, nunca abort.
+
+**v2 (under demand)** pode adicionar `**Covers AC:** #N, #M` como column adicional na Tests section; coverage = união {Tests rows covers} ∪ {spec scenarios covers}.
+
+## Out-of-scope (v1 vs v2)
+
+**v1 implementa:** default mode (analyze + apply NEW + re-stamp PRESERVED), MANUAL skip (com no-op frontmatter bump quando ALL-MANUAL pra evitar STALE deadlock), UPDATED/DELETED/ORPHAN warnings, single + cross-layer specs, no-op bump for non-content-touching specs, legacy abort, no-op exit em modern sem Specs.
+
+**v2 (under demand):**
+- `--reconcile` mode com `AskUserQuestion` per delta (UPDATED/DELETED/ORPHAN).
+- `--force-regen <scenario>` override.
+- `--strict` flag (transforma warnings de coverage gate em abort hard).
+- `--analyze` flag dedicado (v1: default mode já é analyze + apply NEW; user roda novamente após editar).
+- Auto-deletion de cenários ORPHAN.
+- CONFLICTED state detection (hash do auto-generated content).
+- Tests section convention `(cobre AC #N)` para coverage cross-source.
+- Heal phase (Microsoft Section 3) integration em /implement.
+- App exploration durante /plan-test-specs via comandos Microsoft Section 1.3.
+- Backend equivalente de `playwright-cli` (não existe; ficará manual indefinidamente).
+- Cross-spec coverage reports.
+- v2 marker estruturado `**Cross-layer:** true` field — eliminaria fragilidade do byte-verbatim `(cross-layer)` keyword.
+- Per-SI mtime tracking via parsing de Revisions blocks (mitiga overdetecção UPDATED).

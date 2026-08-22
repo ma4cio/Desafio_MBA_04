@@ -191,3 +191,165 @@ When a stage cannot proceed, it **aborts with an explicit command the user can c
 Never guess, never auto-recover, never partially proceed. The pipeline is deterministic and observable — every state transition is a command, every failure points to the next one.
 
 ## Shared convention — Subagent delegation
+
+Heavy reads (project-plan, globbing all decisions docs, scanning prior phases) are delegated to subagents in `.claude/agents/`:
+
+- `decisions-reader` — globs and filters decisions docs; returns a structured TD index.
+  - Phase mode: filter by `NN ∈ related_phases`.
+  - Task mode: filter by filename match on the task's own decisions doc (if it exists).
+- `decisions-detail-reader` — extracts `**Recommendation**` prose + `**Libraries**` for each decided TD; output is embedded in context.md's `## Decisions Detail` section. Same mode-aware filter as `decisions-reader`.
+- `decisions-correlator` — (new) semantic filter across decisions docs by candidate pool.
+  - Phase mode pool: `scope_type: ad-hoc` with `related_phases: []` (origin 3 — standalone and task research that would otherwise be invisible to phase mode).
+  - Task mode pool: every decisions doc EXCEPT the task's own.
+  Returns a ranked shortlist; the caller confirms inclusion via `AskUserQuestion`.
+- `phases-reader` — reads prior phases; returns Conventions to Match AND Inherited TD Details AND **Inherited Deferred Capabilities** (extracted from each prior phase's context.md `## Non-UI / Deferred Capabilities` rows where `Status: deferred`).
+  - Phase mode: all prior phases (NN-1, NN-2, …).
+  - Task mode: the latest completed phase (NN where every `phase-NN-*/progress.md` reports `Status: completed`). Sliced phases count as completed only when ALL slices are done.
+- `plan-reader` — extracts target phase + neighbors from project-plan.md. **Only dispatched in phase mode** (project-plan.md is phase-exclusive).
+- `inventory-digest-reader` — reads the screen inventory file and returns a compact digest for embedding in context.md's `## UI Inventory` section (includes `### UI ↔ Capability Join`, `### Server-connected Components`, `### Open Questions from Inventory` verbatim).
+  - Phase mode: slug-exact lookup at `docs/inventories/screen-inventory-phase-NN-{slug}.md` (no wildcard). Caller must pass `slug` alongside `NN`.
+  - Task mode: reads `docs/tasks/task-{slug}/inventory.md`.
+  - Dispatched **conditionally** — only when the inventory file exists. Absence is handled by the caller via fallback placeholder (not an error).
+  - Task mode additionally consumes inventories from ALL UI-bearing slices of the latest completed phase (aggregated + deduped by component name) and emits `### Inherited UI Components` for cross-phase DS reuse.
+
+Dispatch them **in parallel** via the `Agent` tool with `subagent_type: <name>`. Each subagent returns a compact structured response (table or YAML-like) — the main thread consolidates without loading the raw source files.
+
+**Subagent default mode=phase (Decisão #25).** `phases-reader`, `decisions-reader`, `decisions-detail-reader`, `inventory-digest-reader` treat the absence of `mode` as `mode=phase`. Callers that never pass `mode` (legacy pre-rename dispatches, or any caller exercising phase behavior) continue to work unchanged. Task mode requires the caller to pass `mode=task` explicitly.
+
+**When to use subagents vs direct reads:**
+
+- Subagent — a file is large (>100 lines) OR multiple similar files need filtering OR the main thread only needs a distilled summary.
+- Direct Read — a file is small enough to fit in a single bounded Read AND the main thread needs its structure (e.g., you are about to Edit it — Read is a prerequisite). `context.md` exception: read in full per stage despite size — single read beats scattered TD reads.
+
+## Shared convention — Read strategy rules
+
+Every stage skill applies these mandatory rules to keep the main context window small:
+
+1. **Frontmatter-first filtering** — when globbing `docs/decisions/*.md` or `docs/phases/*/`, read only the frontmatter (top `---` block, typically ≤15 lines) first. Decide relevance from frontmatter fields (`scope_type`, `related_phases`, `status`) before reading any body content.
+
+2. **Bounded grep via sibling-anchor** — to extract a section (a TD block, an SI block, a named subsection), use `Grep -n` to locate both the target header AND the next sibling header of the same level, then `Read` the exact line range. Never use `-A N` blindly — it over-fetches or under-fetches.
+
+   Example: to read TD-05 from a decisions doc, grep `^### TD-0[56]` with `-n`; take the two line numbers; Read from the first to the second minus one.
+
+3. **Structured return contracts for subagents** — every subagent prompt ends with a strict output contract: "Return ONLY a markdown table with columns X/Y/Z. No prose. No quotes longer than one line from source. Max N rows." Forces the subagent to distill, not relay.
+
+4. **Build SI-by-SI no-lookback** — `plan-build` writes one SI at a time. After a SI is Edited into the phase file, it is not re-Read. To reference prior SIs (e.g., to build the Dependency Map), grep their headers only.
+
+5. **Abort-fast in O(1) before heavy reads** — every stage's first actions are cheap checks: does the prerequisite artifact exist? Is slug discovery unambiguous? Are `sources_mtime` keys present and valid? Any failure aborts immediately, before dispatching subagents or reading decisions docs.
+
+**Soft preferences (not hard rules):**
+
+- **Resolve in two passes** — collect all `AskUserQuestion` answers first (computing `(file, old_string, new_string)` tuples in memory), then apply all Edits. Avoids partial-state failures.
+- **Read budget per skill** — each stage SKILL.md is expected to complete its work within a small number of main-thread Reads (typically 1-3). Exceeding suggests the decomposition is leaking.
+
+## Shared convention — Decisions docs scope model
+
+Decisions docs with `scope_type: phase` MAY exist in multiples per NN (slices). Each must have a distinct slug and exactly one integer in `related_phases`. When building context for phase NN + slice `{slug}`, include:
+
+- The phase-scope doc `{slug}` (discovered via slug resolution).
+- Every `scope_type: ad-hoc` doc whose `related_phases` contains NN.
+- Sibling phase-scope docs listed in this slice's `depends_on_slices` (via inheritance — see Phase slicing section).
+
+Both phase-scope and ad-hoc docs contribute TDs to the `Decisions Index` in `context.md`. TD references use the form `{slug}/TD-NN` — the slug part disambiguates across source docs (phase-scope slices AND ad-hoc docs).
+
+**Term — `task-sem-research`** (used across `plan-context`, `plan-validate`, `plan-resolve`, `plan-build`): a task created via `/plan-context {slug}` (or higher-level entry) **without** a prior `/research` dispatch — so `docs/decisions/technical-decisions-{slug}.md` does not exist. The pipeline detects this via the absence of the file and emits placeholder sections (e.g., `## Decisions Index` empty, `## Decisions Detail` placeholder); `plan-resolve` may resolve it inline by creating the decisions doc on the fly when the user answers an `MD-N` issue. This is a recognized branch, not an error.
+
+## Shared convention — Phase slicing
+
+A single logical phase in `project-plan.md` MAY be realized as multiple **slices**, each with its own phase-scope decisions doc, planning artifacts, and build output. Monolithic phases (1 slice) remain a first-class case: a phase with exactly 1 phase-scope doc behaves identically to the pre-slicing pipeline.
+
+### Slice frontmatter fields (owned by `research/SKILL.md`)
+
+Two optional fields on `scope_type: phase` docs drive slicing:
+
+- **`covers_capabilities: [<bullet verbatim from project-plan.md>, ...]`** — declares which of the phase's capability bullets this slice owns. Omitted = "this slice covers all capabilities of its phase" (monolithic semantics).
+- **`depends_on_slices: [<sibling-slug>, ...]`** — declares a cross-slice dependency DAG within the same NN. Omitted or `[]` = no sibling dependency.
+
+### Maturity gate for `depends_on_slices`
+
+When a slice `S` depends on sibling `T`, pipeline stages that inherit from `T` require `T` to be **mature**: either every TD in `T`'s decisions doc has `status: decided` OR `T`'s plan-build artifact is already on disk. Stages skip immature siblings and surface a warning (no abort) — the user decides whether to defer planning `S` until `T` stabilizes.
+
+### Sibling-restamp sequencing (slicing migration)
+
+When a previously-built sibling `T`'s decisions doc frontmatter is mutated (e.g., adding `covers_capabilities` during slicing migration), `T`'s `context.md` / `validation.md` / phase artifact all carry `sources_mtime` entries that become stale. **Restamp `T` BEFORE planning any dependent slice `S`**: run `/plan-context T` to refresh `T`'s `context.md` with the new mtime. Skipping this step causes `S`'s first `/plan-context S` to record a fresh stamp for `T`'s `context.md` that is then immediately invalidated when `T` is later restamped, forcing a redundant rerun of `/plan-context S`. The pipeline self-corrects (staleness detection works), but the extra rerun is avoidable by restamping siblings first.
+
+### Phase-level coverage gate (advisory/hard split)
+
+Across all slices of `NN`, the union of `covers_capabilities` MUST cover every bullet of the phase in `project-plan.md`. Enforcement is split:
+
+- **`plan-validate`** — advisory (`MC-cross-N`) surfaced early on every slice; suppressed when NN has only 1 slice (monolithic — no gap by construction).
+- **`plan-build`** — hard gate on the **last slice** (the slice whose build would complete all siblings). Aborts if any capability is uncovered.
+
+See `plan-validate/SKILL.md` Check 8 (advisory) and `plan-build/SKILL.md` Gate 9.5 (hard) for the detailed algorithm.
+
+### Sources of UI-scope detection per slice
+
+`screen-inventory/SKILL.md` and `plan-context/SKILL.md` Step 0.5 read `covers_capabilities` (or fall back to phase bullets when omitted) to decide if a slice has UI scope. This replaces the prior phase-level `Affected subprojects` heuristic — UI-bearing status is now a per-slice concept.
+
+## Shared convention — Artifact frontmatter format
+
+Every **planning artifact** uses YAML frontmatter. The **authoritative shape for new outputs** is:
+
+```yaml
+kind: phase | task         # authoritative when present
+name: phase-NN-{slug} | task-{slug}
+sources_mtime:
+  path/to/source.md: ISO-8601-timestamp
+state: <transient-state-marker>   # OPTIONAL — present only while artifact is in a named transient state (see below)
+```
+
+**Reading rule — skills MUST accept BOTH legacy and new shapes (evaluated in order):**
+
+1. `kind:` present → authoritative. `phase:` (if also present) is informative only.
+2. `kind:` absent + `name:` starts with `task-` → infer `kind: task` (name prefix wins over a contradictory legacy `phase:` field, per Decisão #29).
+3. `kind:` absent + `phase:` present + `name:` starts with `phase-` → infer `kind: phase`, `NN = phase`.
+4. `kind:` absent + `phase:` absent + `name:` starts with `phase-` → infer `kind: phase`, parse `NN` from name.
+5. Otherwise (including `name:` missing or malformed) → abort: `"Planning artifact has malformed frontmatter — needs either `kind:` + `name:` (new format) or `phase:` + `name:` (legacy)."`
+
+**Writing rule — new outputs:**
+
+- Always emit `kind:` + `name:`.
+- **Never emit `phase:` integer** in new outputs, even in phase mode. `kind: phase` + `name: phase-NN-{slug}` carries all the information.
+- Legacy artifacts pre-dating this rename keep their `phase:` integer until they are naturally regenerated (e.g., `/plan-context` rerun overwrites the file with the new shape).
+
+**Optional `state:` field (transient-state marker) — cross-cutting convention:**
+
+`state:` is an **ephemeral** field present in an artifact only while it is in a named transient state. Its presence in an artifact's frontmatter triggers downstream preflight checks to abort with a state-specific actionable message. When the state resolves, the field is removed on the next write. Never include `state:` in the frontmatter of a fully-valid final artifact — the field's absence is the canonical signal that the artifact is complete.
+
+Registered values:
+
+| Value | Owner (writes) | Readers (preflight aborts) | Meaning | Clearance |
+|-------|----------------|----------------------------|---------|-----------|
+| `partial-awaiting-inventory` | `plan-context` Step 0.5 option (a), task mode only | `plan-validate` Step 4.5, `plan-build` Step 3.5 | context.md was written with `## Scope` only so `screen-inventory` can read scope prose; pipeline awaiting `/screen-inventory {slug}` + `/plan-context {slug}` rerun to fully populate | Removed automatically when `/plan-context` rerun overwrites context.md end-to-end |
+
+Parsing obligation for readers is documented in each stage's SKILL.md (the preflight step that resolves `kind:` also captures `state:` in the same bounded-frontmatter read). The preflight position of the state-marker check sits immediately after the `kind:` resolution step and before any body read, so partial artifacts are detected early with a dedicated actionable message (not masked by later "section missing" aborts).
+
+_Stage-specific marker: `test_specs_aware: true` is emitted by `plan-build/phase-a.md` and read by `/plan-test-specs` + `/implement` preflight. It is NOT cross-cutting — it does not trigger aborts in any upstream stage and is therefore not registered in the table above. Documented at the owner site (`plan-build/phase-a.md` § "Frontmatter emission rules") rather than here._
+
+Stage-specific fields (`status`, `issue_count`, `issues`, `libs`, …) are documented in each stage's SKILL.md. Never write content to a planning artifact without frontmatter.
+
+Planning artifacts:
+
+- **Phase mode (in `docs/phases/phase-NN-{slug}/`):** `context.md`, `validation.md`, `phase-NN-{slug}.md`.
+- **Task mode (in `docs/tasks/task-{slug}/`):** `context.md`, `validation.md`, `task-{slug}.md`.
+
+Both follow the minimum frontmatter shape above.
+
+**Decisions docs** (in `docs/decisions/`) are managed by `research` and follow their own frontmatter schema — `scope_type`, `related_phases`, `status`, `date`, `scope_description` — documented in `research/SKILL.md`. They are not subject to the `kind:` / `name:` minimum above; their identity is carried by the filename slug and the `related_phases` array. This shape is **unchanged** by the task-mode generalization — `scope_type: ad-hoc` with `related_phases: []` already covered task-mode research natively (Decisão #18).
+
+**Exception — `library-refs.md`.** This is a scope-agnostic library-docs cache owned by `plan-resolve`, not a planning artifact. It deliberately omits `kind:` / `name:` / `phase:` from its frontmatter (carrying only `libs:` + `sources_mtime:`) so the same file can be byte-copied across phase or task directories when an ad-hoc decisions doc with multiple `related_phases` introduces a shared library. Consumers of `library-refs.md` (only `plan-build`) treat it as content addressable by directory location, not by self-declared identity.
+
+**Exception — `inventory.md` / `screen-inventory-phase-NN-*.md`.** These are owned by `screen-inventory`, not by `plan-*` stages. They carry their own frontmatter schema (`Status: Pending | Validated`, `Date`, `Screens in scope: N`) documented inside `screen-inventory/SKILL.md`. Treated as external source files from the pipeline's perspective — the `inventory-digest-reader` subagent wraps reads; no `plan-*` stage writes them.
+
+## Conventions inherited from existing phase docs
+
+The format of the final planning artifact — `phase-NN-{slug}.md` or `task-{slug}.md` — (Step Implementations, Technical Specifications, Dependency Map, Deliverables) is established by `docs/phases/phase-01-base-setup/phase-01-base-setup.md`. `plan-build` replicates this format regardless of mode. Cross-phase conventions (Portuguese prose + English identifiers, per-TD traceability via inline backticked refs, SI template structure, etc.) propagate through `context.md`'s `## Inherited Conventions` section: `phases-reader` extracts them from prior phases (reading each phase's `context.md`, with a fallback to a `## Conventions to Match` section in the phase doc for legacy phases that still carry one), and `plan-context` flattens them into the current phase's (or task's) `## Inherited Conventions`. Final artifacts never emit a conventions section themselves — inheritance flows through `context.md`.
+
+When UI is in scope, the same format contract for the final artifact applies: `UI Contracts` and `UI ↔ API Traceability Matrix` subsections in Technical Specifications follow the templates under `.claude/skills/plan-build/templates/tech-specs/` (`ui-contracts.md`, `traceability-matrix.md`). Cross-phase UI conventions (component naming, reuse patterns, routing conventions) propagate through `context.md`'s `## Inherited Conventions` section like any other convention — `phases-reader` extracts them as-is.
+
+## What lives here vs. in stage skills
+
+- **Here (`plan-pipeline/SKILL.md`):** shared conventions referenced by all stages. Topology, directory layout, slug discovery, staleness, gating, issue IDs, read strategy, subagent dispatch, frontmatter contract.
+- **In each stage skill:** responsibility of that stage, exact inputs/outputs, ordering of its internal steps, its own abort conditions, output format details.
+
+Stage skills reference this document with phrases like *"per Slug discovery in plan-pipeline/SKILL.md"* — they do not repeat the rule.

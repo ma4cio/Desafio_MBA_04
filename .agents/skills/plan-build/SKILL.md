@@ -178,4 +178,114 @@ Each phase file emits one of these terminal messages. The literal templates live
 PHASE A DONE. Wrote scaffold + Technical Specifications ({comma-separated subsection names, or "none"}) for {phase NN | task {slug}}. Sentinelas in place: <!-- phase-a-complete --> + <!-- SIs will be written in Phase B --> + Dep Map / Deliverables. Next: rerun /plan-build {identifier} when ready (Gate 10 will detect both required sentinelas and skip straight to Phase B).
 ```
 
-### Successful completion (Pha
+### Successful completion (Phase B7 or Phase C7)
+
+Phase B7:
+
+```
+DONE. Wrote {N} SIs ({SI-NN.1, SI-NN.2, ...}). Technical Specifications: {comma-separated subsection names, or "none"}. Dependency Map + Deliverables written. Next: run /implement {identifier} to execute the plan SI-by-SI.
+```
+
+**Modern-mode hint (B7) — emit conditionally.** When the plan frontmatter declares `test_specs_aware: true` AND at least one SI carries a `**Test Specs:** _pending` placeholder, replace the legacy "Next:" line with a `/plan-test-specs` hint emitted before the `/implement` invocation:
+
+```
+DONE. Wrote {N} SIs ({SI-NN.1, SI-NN.2, ...}). Technical Specifications: {...}. Dependency Map + Deliverables written. Next: run /plan-test-specs {identifier} to author spec files for screen-wiring/controller/cross-layer SIs (look for `**Test Specs:** _pending /plan-test-specs_` placeholders), then /implement {identifier}.
+```
+
+Without this hint a fresh build of a modern phase routes the user straight to `/implement`, which then aborts with "PENDING TEST SPECS: Run /plan-test-specs <slug> first." — unnecessary round-trip. Modern phases backend-pure (zero placeholders) should NOT receive the hint — it would point at a `/plan-test-specs` invocation that no-ops. Detection algorithm (compound):
+
+```bash
+TEST_SPECS_AWARE=$(awk '/^---$/{f=!f;next} f' "$PLAN" | grep -c "^test_specs_aware: true$" || echo 0)
+PENDING=$(grep -c "^\*\*Test Specs:\*\* _pending" "$PLAN" || echo 0)
+# Emit modern hint só quando modern AND placeholders exist
+[ "$TEST_SPECS_AWARE" -gt 0 ] && [ "$PENDING" -gt 0 ] && emit_modern_hint || emit_legacy_hint
+```
+
+Modern plan SEM placeholders (fase backend pura) cai no fallback legacy "Next: run /implement" — evita o no-op `/plan-test-specs`. Plans em modo legacy (frontmatter sem `test_specs_aware: true`) também caem no fallback, mantendo a shape original byte-by-byte.
+
+Phase C7 (append-mode):
+
+```
+DONE (append-mode). Processed {N} delta events: {summary list — Edit cirúrgica on SI-X.Y / Append amendment SI-N.M / Append new behavior SI-N.M / Annotate superseded SI-X.Y}. sources_mtime refreshed; progress.md updated for new SIs. Next: run /implement <new-SI> to execute the appended work (only when amendment / new-behavior SIs were created).
+```
+
+**Modern-mode hint (C7) — emit conditionally.** When the plan declares `test_specs_aware: true` AND **either** new placeholders exist (PENDING > 0) **or** any spec already lives in `<subproject>/specs/` (EXISTING_SPECS > 0), replace the legacy "Next:" line with a `/plan-test-specs` hint:
+
+```
+DONE (append-mode). Processed {N} delta events: ... sources_mtime refreshed; progress.md updated for new SIs. Next: run /plan-test-specs <slug> to re-stamp Last sync of PRESERVED specs and author specs for any new screen-wiring/controller/cross-layer SIs, then /implement <new-SI>.
+```
+
+C7 extends the B7 algorithm with `EXISTING_SPECS` because Phase C5 refreshes `sources_mtime` on the plan — that bumps the plan's mtime above every PRESERVED spec's `Last sync`, so even when no new placeholder was appended, existing specs need a re-stamp pass to satisfy `/implement`'s preflight (otherwise it falsely aborts STALE). Detection algorithm (compound):
+
+```bash
+TEST_SPECS_AWARE=$(awk '/^---$/{f=!f;next} f' "$PLAN" | grep -c "^test_specs_aware: true$" || echo 0)
+PENDING=$(grep -c "^\*\*Test Specs:\*\* _pending" "$PLAN" || echo 0)
+# Scan every subproject's `specs/` directory at once via path glob — works for any subproject layout
+# (specs live at `<subproject>/specs/*.plan.md` by convention; see plan-test-specs/SKILL.md § "Resolve spec path(s)")
+EXISTING_SPECS=$(find . -path '*/specs/*.plan.md' -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | wc -l)
+# Emit C7 modern hint quando modern AND (novos placeholders OU specs existentes)
+[ "$TEST_SPECS_AWARE" -gt 0 ] && { [ "$PENDING" -gt 0 ] || [ "$EXISTING_SPECS" -gt 0 ]; } && emit_modern_hint || emit_legacy_hint
+```
+
+In legacy mode OR modern without placeholders AND without existing specs, the hint is omitted — output keeps its original shape byte-by-byte. Hard rules below are unchanged: `test_specs_aware` is owned by `phase-a.md` (frontmatter emission rule), not by dispatch logic of this SKILL.md.
+
+### Failure at any step
+
+```
+FAILED at {step-label}. Written so far: {state — "none" | "scaffold + Technical Specifications" | list of SIs already appended}. Error: {one-sentence reason}. Next: {canonical next-command — default "rerun /plan-build <arg> to redo from scratch"; substitute a specific stage command when the failure is due to an upstream precondition that must be fixed first (e.g., missing library in library-refs.md → "run /plan-resolve <arg> to backfill the library cache before retrying /plan-build <arg>")}.
+```
+
+Valid step-labels: `input-parse`, `step-1-decompose`, `step-1-coverage`, `step-2-scaffold`, `step-3-si-{N}`, `step-4-specs`, `step-4-{rule-id}` (per-rule label emitted by custom rules that abort at A4.5; `{rule-id}` is declared in the rule body and matches the IC prefix lowercased), `step-5-depmap`, `step-5-deliverables`. Phase C aborts use natural-language messages (the matrix in phase-c.md § "When append-mode runs", the empty-deltas abort in C1, and the user-cancel from C3) rather than the structured `FAILED at` format — they are not internal procedural errors but user-facing decisions.
+
+No prose preamble. No closing summary. No "Done." line beyond the structured report.
+
+---
+
+## Hard rules
+
+These invariants apply across every phase. They are listed here (and only here) so any future cross-cutting change has a single place to land. The phase files reference this section by name.
+
+- **Never write the full file in a single Write call.** Incremental (scaffold → Tech Specs subsections via Edit → SI-by-SI Edits → Dep Map Edit → Deliverables Edit) is mandatory — it respects output size limits and the SI-by-SI no-lookback rule.
+- **No decisions-doc reads (TDs in memory from context.md).** All TD detail is in context.md's `## Decisions Detail` (current-scope) and `## Inherited Decisions Detail` (inherited). Any reference to a TD in Technical actions uses the Recommendation prose already in memory from whichever of A1 or B1 ran.
+- **Never re-read context.md within a phase by default.** Read once at A1 in Phase A. In Phase B, B1(a) reads context.md only on new-session resume (same-session continuation skips B1 entirely — the content is in the message log). Re-reads are the on-demand fallback documented at the end of Phase B § B1 — fire only when working memory recall fails.
+- **Phase B Technical actions must align with Phase A Tech Specs.** Tech Specs become available to Phase B either through the message log (same-session continuation, from the A4 Edit arguments) or through B1(b) (new-session resume, bounded read of `## Technical Specifications` from `{target_path}`). Either way, B2 and B4 consume those normalized specs (Data Model field names, API Contracts shapes, Authorization Matrix rows, Error Catalog codes, UI Contracts per screen). Do not re-derive these from raw TD prose in Phase B — the only canonical surface is what Phase A wrote.
+- **Never re-read already-written SIs.** After Edit appends an SI block to the file, do not Read it back. Grep headers only if a cross-ref is needed (`Grep -n '^### SI-' {target_path}`).
+- **Do not invent TDs or conventions.** Every citation must be sourced from context.md — `## Decisions Index`, `## Decisions Detail`, `## Inherited Decisions Detail`, or `## Inherited Conventions`.
+- **Do not emit prose outside the template.** The artifact has a fixed shape; no meta-commentary, no "Notes for the implementer" sections beyond what the template provides.
+- **No Agent dispatch in /plan-build default path.** Reads of context.md, library-refs.md, and inventory bounded sections happen directly from the main thread. The skill may call `Skill` (e.g., `context7` MCP tool) or `AskUserQuestion` (the A5 pause, Phase C diff preview) — both are main-thread tool calls, not subagent dispatches.
+- **Aborts replace writes (per Gate 10).** Gate 10 requires both `<!-- SIs will be written in Phase B -->` AND `<!-- phase-a-complete -->` to enter the resume branch. The 5 abort outcomes:
+  - Abort before A3 → no file exists. Next `/plan-build <arg>` runs fresh Phase A.
+  - Abort mid-A4 OR mid-A4.5 (some Tech Specs subsections written, optionally a `<!-- {rule-id}-pending -->` sentinel from a `docs/rules/plan-build/` rule abort, A4.6 didn't run, phase-a-complete absent) → next run sees only the SIs sentinela; routes to fresh Phase A; Write in A3 overwrites the half-built file (including any custom-rule sentinel). Partial Tech Specs are discarded — never read by Phase B; A4.5 re-runs all rules against the freshly-rendered Tech Specs.
+  - Abort exactly between A4.6 and A5 (both required sentinelas present, A5 pause never dispatched) → next run treats it as the canonical resume state and proceeds to Phase B. Equivalent to user picking "Stop here" in A5.
+  - Abort mid-Phase B between B4 SI Edits (SIs sentinela already replaced, phase-a-complete still present) → next run sees only phase-a-complete; routes to fresh Phase A; Write overwrites.
+  - Abort after B7 success (all sentinelas removed) → next run sees neither; routes to **Phase C (append-mode)** by default (or fresh Phase A under `--rebuild`).
+  In all cases the user does not need to `rm` anything; just rerun.
+- **Inventory file reads are bounded per-screen.** Never Read the full inventory file; always grep for screen section boundaries first (Phase A § A4 step c).
+- **`ui_in_scope: deferred` state.** UI Contracts and UI ↔ API Traceability Matrix subsections are NOT emitted when `ui_in_scope == deferred`. The artifact is valid without them — deferred UI is an explicit user decision documented in `## Non-UI / Deferred Capabilities`. Phase B's `templates/screen-si.md` is also not read in this state.
+- **TD Scope filter from A2 is mandatory in A4.** TDs with `Scope: Repo-wide` are never rendered in any runtime subsection (Phase A § A2).
+- **Sentinela canonical source.** The literal forms `<!-- SIs will be written in Phase B -->`, `<!-- phase-a-complete -->`, and `<!-- {rule-id}-pending -->` (canonical: `<!-- ccr-pending -->`; future abort-capable rules in `docs/rules/plan-build/` declare their own unique `{rule-id}` in their body) are defined in Gate 10 above. Phase A writes them; Phase B consumes the first two; Gate 10 reads any `<!-- *-pending -->` generically. Never paraphrase. Validator flags drift between Gate 10 and any phase file's Edit anchors or rule MD body.
+
+### Append-mode hard rules (Phase C)
+
+These extend the rules above with append-mode-specific invariants:
+
+- **Never renumber existing SIs.** New SIs always extend the numbering forward; existing SI numbers are immutable.
+- **Never modify executed SIs (status `completed` in progress.md).** Always append a new amendment SI instead.
+- **Diff preview is mandatory.** No Edit fires without C3 confirmation (the AskUserQuestion summarizing all proposed changes). The fail-safe is "user said cancelar".
+- **`sources_mtime` refresh is mandatory** (Phase C § C5). Skipping it makes the next run replay the same deltas.
+- **`progress.md` must exist for append.** Ausência aborta com mensagem explícita — see Phase C § "When append-mode runs" matrix.
+- **`--rebuild` flag is the escape hatch.** When the user wants legacy overwrite behavior, the flag bypasses Phase C entirely and falls back to fresh Phase A (Rerun semantics case 5 override).
+
+---
+
+## Rerun semantics
+
+Cases (Gate 10 dispatches):
+
+1. **`/plan-build NN` with no existing artifact** → fresh Phase A (Write scaffold + Tech Specs + sentinelas + phase-a-complete), pause at A5.
+2. **`/plan-build NN` with both required sentinelas present** (`<!-- SIs will be written in Phase B -->` AND `<!-- phase-a-complete -->`) → Gate 10 skips Phase A, enters Phase B directly (resume case). B1 reloads context.md and bounded-reads Tech Specs.
+3. **`/plan-build NN` with only the SIs sentinela** (no phase-a-complete) → Phase A errored mid-A4 in a prior run, OR a rule from `docs/rules/plan-build/` aborted in A4.5 with a `<!-- {rule-id}-pending -->` sentinel injected. Partial Tech Specs (and any custom-rule abort sentinel) are not trustworthy. Fresh Phase A overwrites.
+4. **`/plan-build NN` with only phase-a-complete** (no SIs sentinela) → Phase B started and replaced the SIs sentinela in a prior run, then errored. Fresh Phase A overwrites.
+5. **`/plan-build NN` with a fully-completed artifact (no sentinelas)** → **route to Append-mode** (Phase C) by default. To force a fresh full rebuild instead, pass the explicit `--rebuild` flag (`/plan-build NN --rebuild`) and the dispatcher falls back to fresh Phase A (the legacy "idempotent overwrite" semantics).
+
+The skill keeps no state across runs; every invocation starts from the preflight gates. Stability across reruns comes from the upstream artifacts (context.md, library-refs.md, decisions docs) being stable — not from the final artifact itself.
