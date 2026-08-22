@@ -2,10 +2,11 @@ import { envValidationSchema } from './env.validation';
 
 const requiredEnv = {
   DB_USERNAME: 'user',
-  DB_PASSWORD: 'pass',
+  DB_PASSWORD: 'x'.repeat(24),
   DB_NAME: 'db',
-  JWT_SECRET: 'secret',
-  JWT_REFRESH_SECRET: 'refresh-secret',
+  JWT_SECRET: 'x'.repeat(32),
+  JWT_REFRESH_SECRET: 'y'.repeat(32),
+  S3_SECRET_KEY: 'x'.repeat(32),
 };
 
 const validate = (env: Record<string, string>) =>

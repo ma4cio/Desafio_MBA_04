@@ -1,0 +1,61 @@
+name: Phase 03 quality gate
+
+on:
+  push:
+    branches:
+      - dev
+      - 'feature/**'
+  pull_request:
+    branches:
+      - dev
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase-03-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: nestjs-project
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate ephemeral test credentials
+        shell: bash
+        run: |
+          echo "DB_PASSWORD=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
+          echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "JWT_REFRESH_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "S3_SECRET_KEY=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
+
+      - name: Build and start the full stack
+        run: docker compose up --build --detach --wait
+
+      - name: Unit and integration tests
+        run: docker compose exec -T nestjs-api npm test -- --runInBand
+
+      - name: End-to-end tests
+        run: docker compose exec -T nestjs-api npm run test:e2e -- --runInBand
+
+      - name: TypeScript typecheck
+        run: docker compose exec -T nestjs-api ./node_modules/.bin/tsc --noEmit
+
+      - name: Production build
+        run: docker compose exec -T nestjs-api npm run build
+
+      - name: Lint
+        run: docker compose exec -T nestjs-api npm run lint
+
+      - name: Print service logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans
