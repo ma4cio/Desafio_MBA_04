@@ -46,6 +46,9 @@ jobs:
             echo "S3_SECRET_KEY=$S3_SECRET_KEY"
           } >> "$GITHUB_ENV"
 
+      - name: Prepare bind-mount ownership
+        run: sudo chown -R 1000:1000 .
+
       - name: Build and start the full stack
         run: docker compose up --build --detach --wait
 
