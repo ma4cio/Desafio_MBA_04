@@ -17,6 +17,8 @@ const MANAGED_TABLES = [
   'videos',
 ];
 
+const MANAGED_ENUMS = ['verification_tokens_type_enum', 'videos_status_enum'];
+
 describe('Database migrations (integration)', () => {
   let dataSource: DataSource;
 
@@ -35,25 +37,37 @@ describe('Database migrations (integration)', () => {
 
     await dataSource.initialize();
 
-    await Promise.all([
-      ...MANAGED_TABLES.map((table) =>
-        dataSource.query(`DROP TABLE IF EXISTS "${table}" CASCADE`),
-      ),
-      dataSource.query(`DROP TABLE IF EXISTS "migrations" CASCADE`),
-    ]);
+    // Use one query flow per connection. Besides avoiding concurrent pg queries,
+    // explicitly remove PostgreSQL enum types left behind by synchronize-based
+    // integration suites; dropping their tables alone does not remove the types.
+    for (const table of [...MANAGED_TABLES, 'migrations']) {
+      await dataSource.query(`DROP TABLE IF EXISTS "${table}" CASCADE`);
+    }
+    for (const enumName of MANAGED_ENUMS) {
+      await dataSource.query(
+        `DROP TYPE IF EXISTS "public"."${enumName}" CASCADE`,
+      );
+    }
   });
 
   afterAll(async () => {
-    // The second test undoes the last migration, leaving videos missing.
-    // Re-apply so the shared DB is fully migrated when subsequent suites run.
-    await dataSource.runMigrations();
-    await dataSource.destroy();
+    if (!dataSource?.isInitialized) return;
+
+    try {
+      // The second test undoes the last migration, leaving videos missing.
+      // Re-apply so the shared DB is fully migrated when subsequent suites run.
+      await dataSource.runMigrations();
+    } finally {
+      // A migration assertion must never leak the PostgreSQL pool and keep Jest
+      // alive until the CI job timeout.
+      await dataSource.destroy();
+    }
   });
 
   it('should apply all migrations and create all five domain tables', async () => {
     const ranMigrations = await dataSource.runMigrations();
 
-    expect(ranMigrations).toHaveLength(2);
+    expect(ranMigrations).toHaveLength(3);
 
     const result = await dataSource.query<{ table_name: string }[]>(
       `SELECT table_name FROM information_schema.tables
