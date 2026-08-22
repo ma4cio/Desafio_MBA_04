@@ -6,7 +6,7 @@ RUN apt-get update \
 
 WORKDIR /home/node/app
 
-RUN mkdir -p /home/node/app/node_modules \
+RUN mkdir -p /home/node/app/node_modules /home/node/app/dist \
     && chown -R node:node /home/node/app
 
 USER node

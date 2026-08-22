@@ -62,7 +62,7 @@ jobs:
         run: docker compose exec -T nestjs-api npm run build
 
       - name: Lint
-        run: docker compose exec -T nestjs-api npm run lint
+        run: docker compose exec -T nestjs-api ./node_modules/.bin/eslint "{src,apps,libs,test}/**/*.ts"
 
       - name: Print service logs on failure
         if: failure()

@@ -8,6 +8,7 @@ services:
     volumes:
       - .:/home/node/app
       - node_modules:/home/node/app/node_modules
+      - dist:/home/node/app/dist
     environment: &app-environment
       NODE_ENV: development
       DB_HOST: db
@@ -130,5 +131,6 @@ services:
 
 volumes:
   node_modules:
+  dist:
   redis_data:
   minio_data:
