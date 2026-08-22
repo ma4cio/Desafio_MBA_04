@@ -9,12 +9,16 @@ const MAX_RETRIES = 5;
 
 function isPgUniqueViolationOnColumn(err: unknown, column: string): boolean {
   if (!(err instanceof QueryFailedError)) return false;
-  const e = err as any;
-  return (
-    e.code === PG_UNIQUE_VIOLATION &&
-    typeof e.detail === 'string' &&
-    e.detail.includes(column)
-  );
+  const candidates: unknown[] = [err.driverError, err];
+  return candidates.some((candidate) => {
+    if (!candidate || typeof candidate !== 'object') return false;
+    const driverError = candidate as { code?: unknown; detail?: unknown };
+    return (
+      driverError.code === PG_UNIQUE_VIOLATION &&
+      typeof driverError.detail === 'string' &&
+      driverError.detail.includes(column)
+    );
+  });
 }
 
 @Injectable()

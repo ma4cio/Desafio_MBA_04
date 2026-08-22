@@ -149,6 +149,14 @@ NestJS with standard module structure. Source lives in `src/`, compiled output i
 - Each domain feature gets its own module (e.g., `UsersModule`, `VideosModule`) registered in `AppModule`
 - Controllers handle HTTP routing; Services hold business logic; both are scoped to their module
 
+## Videos module and worker
+
+- `src/videos/` owns multipart upload orchestration, storage access, queue publishing, processing status, streaming and download.
+- Browser uploads go directly to MinIO through presigned multipart URLs. The API never receives or buffers the video body; maximum declared size is 10 GiB.
+- `src/worker.ts` is a separate application context used by the `video-worker` Compose service. It consumes BullMQ jobs, streams sources to temporary disk, invokes FFprobe/FFmpeg, uploads thumbnails and always cleans temporary files.
+- Storage clients use `S3_ENDPOINT=http://minio:9000`; only the signing client uses `S3_PUBLIC_ENDPOINT=http://localhost:9000` because URLs are consumed by the host browser.
+- Owner checks are mandatory for status, upload control, streaming, thumbnail and download. Public playback remains deferred to the publication phases.
+
 ## Code Conventions
 
 - **TypeScript:** `nodenext` module resolution, `ES2023` target, `strictNullChecks` on, `noImplicitAny` off

@@ -1,0 +1,10 @@
+[mcp_servers.postgres]
+command = "sh"
+args = ["-lc", "npx -y @modelcontextprotocol/server-postgres \"postgresql://${DB_USERNAME}:${DB_PASSWORD}@localhost/${DB_NAME}\""]
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp"]
+
+[agents]
+max_threads = 6
