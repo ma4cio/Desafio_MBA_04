@@ -2,7 +2,8 @@
 
 **Status:** completed
 **SIs:** 6/6 completed
-**Final quality gate:** [GitHub Actions run #12](https://github.com/ma4cio/Desafio_MBA_04/actions/runs/32544095560) — passed
+**Final quality gate:** [GitHub Actions run #15](https://github.com/ma4cio/Desafio_MBA_04/actions/runs/32544502813) — passed
+**Released to main:** commit `0a5c8e9b4223e42520a00e34d88a9276f1b55549`; `main` differs from validated `dev` only by the merge commit and has no file differences.
 
 ### SI-03.1 — Codex foundation, infrastructure, configuration and data model
 - **Status:** completed
@@ -26,7 +27,7 @@
 
 ### SI-03.4 — Status, thumbnail, streaming and download API
 - **Status:** completed
-- **Tests:** range parser matrix passing; real stream/thumbnail/download E2E authored for Compose CI
+- **Tests:** range parser matrix passing; real stream/thumbnail/download E2E passed in Compose CI
 - **Observations:**
   - Phase 03 is owner-only; anonymous viewing remains correctly deferred to Phase 05.
 
@@ -41,4 +42,5 @@
 - **Tests:** every mandatory challenge criterion rechecked against code, planning artifacts and successful Docker quality-gate evidence
 - **Observations:**
   - The authoring runtime has no Docker executable, so real-service verification was executed by `.github/workflows/phase-03-ci.yml` on a Docker-capable GitHub runner.
-  - Run #12 completed successfully, including stack startup/health, unit/integration, E2E, typecheck, production build, lint and stack cleanup.
+  - Run #15 completed successfully, including stack startup/health, unit/integration, E2E, typecheck, production build, lint and stack cleanup.
+  - The final documentation reconciliation closed the only remaining inconsistency: the plan still had the real-service execution item unchecked even though CI had already passed it.
