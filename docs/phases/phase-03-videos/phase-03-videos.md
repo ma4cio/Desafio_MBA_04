@@ -242,7 +242,7 @@ No SI starts before all listed dependencies are complete.
 - [x] Unique public ID, status lifecycle, streaming and download are implemented.
 - [x] Reversible migration links videos to channels.
 - [x] Unit, integration and E2E test files cover appropriate layers.
-- [ ] Execute real-service integration/E2E and `docker compose config` in a Docker-capable environment.
+- [x] Real-service integration/E2E and Docker Compose startup/health were executed successfully in GitHub Actions quality gate run #15.
 - [x] Focused unit tests pass.
 - [x] TypeScript typecheck and build pass.
 - [x] Lint exits zero.
